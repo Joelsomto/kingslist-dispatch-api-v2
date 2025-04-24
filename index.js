@@ -37,12 +37,11 @@ app.options('*', cors(corsOptions));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Health check endpoint
+// 1. First define your routes
 app.get('/health', (req, res) => {
   res.status(200).json({ status: 'OK' });
 });
 
-// Message sending endpoint - FIXED ROUTE DEFINITION
 app.post('/api/send-message', async (req, res) => {
   try {
     const { accessToken, refreshToken, users, message } = req.body;
@@ -130,13 +129,13 @@ app.post('/api/send-message', async (req, res) => {
   }
 });
 
-// Error handling middleware
+// 2. Then add error handling middleware
 app.use((err, req, res, next) => {
   console.error('Global error:', err);
   res.status(500).json({ error: 'Internal server error' });
 });
 
-// Start server
+// 3. Finally start the server
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
