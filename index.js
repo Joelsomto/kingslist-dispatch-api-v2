@@ -2,36 +2,22 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const kingsChatWebSdk = require('kingschat-web-sdk');
-const rateLimit = require('express-rate-limit');
 
 const app = express();
+const PORT = process.env.PORT || 3000;
 
-// Middleware
 app.use(cors());
 app.use(express.json());
-app.use(rateLimit({ 
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // limit each IP to 100 requests per windowMs
-  message: 'Too many requests from this IP, please try again later'
-}));
-
-// Health check endpoint
-app.get('/api/health', (req, res) => {
-  res.status(200).json({ 
-    status: 'healthy',
-    timestamp: new Date().toISOString()
-  });
-});
 
 /**
  * Send KingsChat Messages API
  * POST /api/send-message
  * Body: { accessToken, refreshToken, users, message }
  */
+
 app.post('/api/send-message', async (req, res) => {
   const { accessToken, refreshToken, users, message } = req.body;
 
-  // Validate input
   if (!accessToken || !refreshToken || !users || !message) {
     return res.status(400).json({
       success: false,
@@ -40,9 +26,11 @@ app.post('/api/send-message', async (req, res) => {
   }
 
   try {
+    // If token is expired, refresh it first
     let currentAccessToken = accessToken;
     let currentRefreshToken = refreshToken;
 
+    // Send messages to all users
     const results = await Promise.allSettled(
       users.map(async (user) => {
         try {
@@ -53,6 +41,7 @@ app.post('/api/send-message', async (req, res) => {
           });
           return { user, status: 'success' };
         } catch (error) {
+          // If token expired, refresh and retry 
           if (error.message.includes('expired')) {
             const refreshed = await kingsChatWebSdk.refreshAuthenticationToken({
               clientId: process.env.KINGSCHAT_CLIENT_ID,
@@ -74,6 +63,7 @@ app.post('/api/send-message', async (req, res) => {
       })
     );
 
+    // the responses
     const successful = results.filter(r => r.value?.status.includes('success'));
     const failed = results.filter(r => !r.value?.status.includes('success'));
 
@@ -92,41 +82,13 @@ app.post('/api/send-message', async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Error in send-message:', error);
     res.status(500).json({
       success: false,
-      error: error.message,
-      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+      error: error.message
     });
   }
 });
 
-// Error handling middleware
-app.use((err, req, res, next) => {
-  console.error('Unhandled error:', err);
-  res.status(500).json({
-    success: false,
-    error: 'Internal server error',
-    details: process.env.NODE_ENV === 'development' ? err.message : undefined
-  });
+app.listen(PORT, () => {
+  console.log(`KingsChat API running on http://localhost:${PORT}`);
 });
-
-// 404 handler
-app.use((req, res) => {
-  res.status(404).json({
-    success: false,
-    error: 'Endpoint not found'
-  });
-});
-
-// Export the Express app for Vercel
-// Export the Express app for Vercel
-module.exports = app;
-
-// Only run server locally (not in Vercel)
-if (require.main === module) {
-  const PORT = process.env.PORT || 3000;
-  app.listen(PORT, () => {
-    console.log(`Server running on http://localhost:${PORT}`);
-  });
-}

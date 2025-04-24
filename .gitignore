@@ -1,0 +1,55 @@
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+package-lock.json
+.env
+.env.*.local
+
+# Logs
+logs
+*.log
+log/
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# OS-specific
+.DS_Store
+Thumbs.db
+
+# Editor folders
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# Build output
+dist/
+build/
+.tmp/
+.cache/
+.next/
+out/
+
+# Coverage
+coverage/
+
+# Dependency directories
+.babel_cache/
+jspm_packages/
+
+# Misc
+*.tgz
+*.gz
+*.zip
+
+# Firebase
+.firebase/
+
+# Optional: for PM2 logs if using process manager
+pids/
+pm2.log
