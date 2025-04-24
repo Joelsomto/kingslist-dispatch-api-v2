@@ -16,7 +16,8 @@
     "express": "^5.1.0",
     "express-rate-limit": "^7.5.0",
     "kingschat-web-sdk": "^0.1.0"
+  },
+  "devDependencies": {
+    "@vercel/node": "^5.1.14"
   }
 }
-
-
