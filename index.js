@@ -122,7 +122,9 @@ app.post('/api/refresh-token', async (req, res) => {
       });
 
       const data = await response.json();
-
+      console.log('Incoming refresh_token:', refresh_token);
+      console.log('Client ID:', process.env.KINGSCHAT_CLIENT_ID);
+      
       if (!response.ok) {
           return res.status(response.status).json(data);
       }
