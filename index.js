@@ -93,7 +93,7 @@ app.post('/api/refresh-token', async (req, res) => {
   // CORS headers
   res.header('Access-Control-Allow-Origin', 'https://kingslist.pro');
   res.header('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Content-Type, Accept, Authorization');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Accept, Authorization, X-Requested-With');
   res.header('Access-Control-Allow-Credentials', 'true');
 
   // Handle preflight
@@ -102,7 +102,7 @@ app.post('/api/refresh-token', async (req, res) => {
   }
 
   try {
-      const { refresh_token, client_id } = req.body;
+      const { refresh_token } = req.body;
 
       if (!refresh_token) {
           return res.status(400).json({ 
@@ -111,20 +111,19 @@ app.post('/api/refresh-token', async (req, res) => {
           });
       }
 
-      // Debugging logs
-      console.log('Received refresh token request for client:', client_id);
-
+      // Prepare the request exactly as in the working PHP version
       const params = new URLSearchParams();
       params.append('grant_type', 'refresh_token');
       params.append('refresh_token', refresh_token);
-      params.append('client_id', client_id || process.env.KINGSCHAT_CLIENT_ID || '5d61e98b-7f02-4ea6-ac7a-9b193f2e425d');
+      params.append('client_id', process.env.KINGSCHAT_CLIENT_ID || '5d61e98b-7f02-4ea6-ac7a-9b193f2e425d');
       params.append('scope', 'openid profile email');
 
       const apiResponse = await fetch('https://connect.kingsch.at/developer/oauth2/token', {
           method: 'POST',
           headers: {
-              'Content-Type': 'application/x-www-form-urlencoded',
-              'Accept': 'application/json'
+              'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+              'Accept': 'application/json',
+              'X-Requested-With': 'XMLHttpRequest'
           },
           body: params
       });
@@ -132,11 +131,12 @@ app.post('/api/refresh-token', async (req, res) => {
       const responseData = await apiResponse.json();
 
       if (!apiResponse.ok) {
-          console.error('King\'s Chat API error:', responseData);
-          return res.status(apiResponse.status).json({
-              error: responseData.error || 'token_refresh_failed',
-              error_description: responseData.error_description || 'Token refresh failed'
+          console.error('King\'s Chat API error:', {
+              status: apiResponse.status,
+              statusText: apiResponse.statusText,
+              body: responseData
           });
+          return res.status(apiResponse.status).json(responseData);
       }
 
       return res.json(responseData);
