@@ -90,49 +90,62 @@ app.post('/api/send-message', async (req, res) => {
 });
 
 app.post('/api/refresh-token', async (req, res) => {
-  // Enable CORS for this endpoint
+  // CORS headers
   res.header('Access-Control-Allow-Origin', 'https://kingslist.pro');
-  res.header('Access-Control-Allow-Methods', 'POST');
-  res.header('Access-Control-Allow-Headers', 'Content-Type, Accept');
+  res.header('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Accept, Authorization');
+  res.header('Access-Control-Allow-Credentials', 'true');
 
-  // Handle preflight request
+  // Handle preflight
   if (req.method === 'OPTIONS') {
       return res.status(200).end();
   }
 
   try {
-      const { refresh_token } = req.body;
+      const { refresh_token, client_id } = req.body;
 
       if (!refresh_token) {
-          return res.status(400).json({ error: 'No refresh token provided' });
+          return res.status(400).json({ 
+              error: 'invalid_request',
+              error_description: 'Missing refresh token' 
+          });
       }
 
-      const response = await fetch('https://connect.kingsch.at/developer/oauth2/token', {
+      // Debugging logs
+      console.log('Received refresh token request for client:', client_id);
+
+      const params = new URLSearchParams();
+      params.append('grant_type', 'refresh_token');
+      params.append('refresh_token', refresh_token);
+      params.append('client_id', client_id || process.env.KINGSCHAT_CLIENT_ID || '5d61e98b-7f02-4ea6-ac7a-9b193f2e425d');
+      params.append('scope', 'openid profile email');
+
+      const apiResponse = await fetch('https://connect.kingsch.at/developer/oauth2/token', {
           method: 'POST',
           headers: {
               'Content-Type': 'application/x-www-form-urlencoded',
-              'Accept': 'application/json, */*'
+              'Accept': 'application/json'
           },
-          body: new URLSearchParams({
-              grant_type: 'refresh_token',
-              refresh_token: refresh_token,
-              client_id: process.env.KINGSCHAT_CLIENT_ID,
-              scope: 'openid profile email'
-          })
+          body: params
       });
 
-      const data = await response.json();
+      const responseData = await apiResponse.json();
 
-      if (!response.ok) {
-          return res.status(response.status).json(data);
+      if (!apiResponse.ok) {
+          console.error('King\'s Chat API error:', responseData);
+          return res.status(apiResponse.status).json({
+              error: responseData.error || 'token_refresh_failed',
+              error_description: responseData.error_description || 'Token refresh failed'
+          });
       }
 
-      res.json(data);
+      return res.json(responseData);
+
   } catch (err) {
       console.error('Token refresh error:', err);
-      res.status(500).json({ 
-          error: 'Internal server error',
-          details: err.message 
+      return res.status(500).json({ 
+          error: 'server_error',
+          error_description: err.message 
       });
   }
 });
