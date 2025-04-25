@@ -90,37 +90,50 @@ app.post('/api/send-message', async (req, res) => {
 });
 
 app.post('/api/refresh-token', async (req, res) => {
-  const { refreshToken } = req.body;
+  // Enable CORS for this endpoint
+  res.header('Access-Control-Allow-Origin', 'https://kingslist.pro');
+  res.header('Access-Control-Allow-Methods', 'POST');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Accept');
 
-  if (!refreshToken) {
-    return res.status(400).json({ error: 'No refresh token provided' });
+  // Handle preflight request
+  if (req.method === 'OPTIONS') {
+      return res.status(200).end();
   }
 
   try {
-    const response = await fetch('https://connect.kingsch.at/developer/oauth2/token', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        'Accept': 'application/json',
-        'X-Requested-With': 'XMLHttpRequest'
-      },
-      body: new URLSearchParams({
-        grant_type: 'refresh_token',
-        refresh_token: refreshToken,
-        client_id: process.env.KINGSCHAT_CLIENT_ID,
-        scope: 'openid profile email'
-      })
-    });
+      const { refresh_token } = req.body;
 
-    const data = await response.json();
+      if (!refresh_token) {
+          return res.status(400).json({ error: 'No refresh token provided' });
+      }
 
-    if (!response.ok) {
-      return res.status(response.status).json(data);
-    }
+      const response = await fetch('https://connect.kingsch.at/developer/oauth2/token', {
+          method: 'POST',
+          headers: {
+              'Content-Type': 'application/x-www-form-urlencoded',
+              'Accept': 'application/json'
+          },
+          body: new URLSearchParams({
+              grant_type: 'refresh_token',
+              refresh_token: refresh_token,
+              client_id: process.env.KINGSCHAT_CLIENT_ID,
+              scope: 'openid profile email'
+          })
+      });
 
-    res.json(data);
+      const data = await response.json();
+
+      if (!response.ok) {
+          return res.status(response.status).json(data);
+      }
+
+      res.json(data);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+      console.error('Token refresh error:', err);
+      res.status(500).json({ 
+          error: 'Internal server error',
+          details: err.message 
+      });
   }
 });
 
