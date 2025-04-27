@@ -255,6 +255,9 @@ app.post('/api/send-message', async (req, res) => {
 /**
  * Token Refresh Endpoint
  */
+/**
+ * Token Refresh Endpoint
+ */
 app.post('/api/refresh-token', async (req, res) => {
   const { refreshToken } = req.body;
 
@@ -266,22 +269,66 @@ app.post('/api/refresh-token', async (req, res) => {
   }
 
   try {
-    const newTokens = await refreshKingsChatToken(refreshToken);
+    const environment = process.env.NODE_ENV === 'production' ? 'prod' : 'dev';
+    let newAccessToken;
+    let newRefreshToken = refreshToken; // Default to original refresh token
+    
+    // First try the direct API call since SDK might not return new refresh token
+    const response = await fetch(`${KINGSCHAT_API_PATHS[environment]}/developer/oauth2/token`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        client_id: process.env.KINGSCHAT_CLIENT_ID,
+        grant_type: 'refresh_token',
+        refresh_token: refreshToken,
+        scope: 'openid profile email'
+      })
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+
+    const data = await response.json();
+    
+    // Check if new refresh token was provided
+    newAccessToken = data.access_token;
+    if (data.refresh_token && data.refresh_token !== refreshToken) {
+      newRefreshToken = data.refresh_token;
+    }
 
     res.json({
       success: true,
-      accessToken: newTokens.accessToken,
-      refreshToken: newTokens.refreshToken,
-      expiresIn: newTokens.expiresIn
+      accessToken: newAccessToken,
+      refreshToken: newRefreshToken,
+      expiresIn: data.expires_in * 1000 // Convert to milliseconds
     });
 
   } catch (error) {
     console.error('Refresh token error:', error);
-    res.status(401).json({
-      success: false,
-      error: 'Token refresh failed',
-      details: error.message
-    });
+    
+    // Fallback to SDK if direct call fails
+    try {
+      const newTokens = await kingsChatWebSdk.refreshAuthenticationToken({
+        clientId: process.env.KINGSCHAT_CLIENT_ID,
+        refreshToken
+      });
+
+      res.json({
+        success: true,
+        accessToken: newTokens.accessToken,
+        refreshToken: newTokens.refreshToken , //
+        expiresIn: newTokens.expiresInMillis
+      });
+    } catch (sdkError) {
+      res.status(401).json({
+        success: false,
+        error: 'Token refresh failed',
+        details: sdkError.message
+      });
+    }
   }
 });
 
