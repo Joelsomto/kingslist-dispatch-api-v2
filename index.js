@@ -89,38 +89,6 @@ app.post('/api/send-message', async (req, res) => {
   }
 });
 
-// app.post('/api/refresh-token', async (req, res) => {
-//   const { refreshToken } = req.body;
-
-//   if (!refreshToken) {
-//     return res.status(400).json({
-//       success: false,
-//       error: 'refreshToken is required'
-//     });
-//   }
-
-//   try {
-//     const newTokens = await kingsChatWebSdk.refreshAuthenticationToken({
-//       clientId: process.env.KINGSCHAT_CLIENT_ID,
-//       refreshToken
-//     });
-
-//     res.json({
-//       success: true,
-//       accessToken: newTokens.accessToken,
-//       refreshToken: newTokens.refreshToken,
-//       expiresIn: newTokens.expiresInMillis
-//     });
-
-//   } catch (error) {
-//     res.status(401).json({
-//       success: false,
-//       error: 'Token refresh failed',
-//       details: error.message
-//     });
-//   }
-// });
-
 app.post('/api/refresh-token', async (req, res) => {
   const { refreshToken } = req.body;
 
@@ -137,18 +105,10 @@ app.post('/api/refresh-token', async (req, res) => {
       refreshToken
     });
 
-    // Generate a new refresh token (UUID v4) if the SDK returned the same one
-    const rotatedRefreshToken = (newTokens.refreshToken === refreshToken)
-      ? require('crypto').randomBytes(32).toString('base64') // Random 32-byte token
-      : newTokens.refreshToken;
-
-    // Invalidate the old refresh token in your database (pseudo-code)
-    // await invalidateOldRefreshToken(refreshToken); 
-
     res.json({
       success: true,
       accessToken: newTokens.accessToken,
-      refreshToken: rotatedRefreshToken, // Always return a new refresh token
+      refreshToken: newTokens.refreshToken,
       expiresIn: newTokens.expiresInMillis
     });
 
