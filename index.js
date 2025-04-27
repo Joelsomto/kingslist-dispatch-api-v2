@@ -89,6 +89,38 @@ app.post('/api/send-message', async (req, res) => {
   }
 });
 
+app.post('/api/refresh-token', async (req, res) => {
+  const { refreshToken } = req.body;
+
+  if (!refreshToken) {
+    return res.status(400).json({
+      success: false,
+      error: 'refreshToken is required'
+    });
+  }
+
+  try {
+    const newTokens = await kingsChatWebSdk.refreshAuthenticationToken({
+      clientId: process.env.KINGSCHAT_CLIENT_ID,
+      refreshToken
+    });
+
+    res.json({
+      success: true,
+      accessToken: newTokens.accessToken,
+      refreshToken: newTokens.refreshToken,
+      expiresIn: newTokens.expiresInMillis
+    });
+
+  } catch (error) {
+    res.status(401).json({
+      success: false,
+      error: 'Token refresh failed',
+      details: error.message
+    });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`KingsChat API running on http://localhost:${PORT}`);
 });
