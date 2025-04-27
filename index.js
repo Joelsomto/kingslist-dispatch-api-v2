@@ -132,7 +132,7 @@ async function refreshKingsChatToken(refreshToken) {
     
     return {
       accessToken: newTokens.accessToken,
-      refreshToken: newTokens.refreshToken || refreshToken, // Fallback to original
+      refreshToken: newTokens.refreshToken, //
       expiresIn: newTokens.expiresInMillis
     };
   } catch (sdkError) {
