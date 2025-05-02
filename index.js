@@ -4,89 +4,112 @@ const cors = require('cors');
 const kingsChatWebSdk = require('kingschat-web-sdk');
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = 3002;
 
 app.use(cors());
 app.use(express.json());
 
-/**
- * Send KingsChat Messages API
- * POST /api/send-message
- * Body: { accessToken, refreshToken, users, message }
- */
-
-app.post('/api/send-message', async (req, res) => {
-  const { accessToken, refreshToken, users, message } = req.body;
-
-  if (!accessToken || !refreshToken || !users || !message) {
-    return res.status(400).json({
-      success: false,
-      error: 'Missing required fields (accessToken, refreshToken, users, message)'
-    });
-  }
-
+async function refreshTokens(refreshToken) {
   try {
-    // If token is expired, refresh it first
-    let currentAccessToken = accessToken;
-    let currentRefreshToken = refreshToken;
+    const refreshed = await kingsChatWebSdk.refreshAuthenticationToken({
+      clientId: process.env.KINGSCHAT_CLIENT_ID,
+      refreshToken
+    });
 
-    // Send messages to all users
-    const results = await Promise.allSettled(
-      users.map(async (user) => {
-        try {
-          await kingsChatWebSdk.sendMessage({
-            message,
-            userIdentifier: user,
-            accessToken: currentAccessToken
-          });
-          return { user, status: 'success' };
-        } catch (error) {
-          // If token expired, refresh and retry 
-          if (error.message.includes('expired')) {
-            const refreshed = await kingsChatWebSdk.refreshAuthenticationToken({
-              clientId: process.env.KINGSCHAT_CLIENT_ID,
-              refreshToken: currentRefreshToken
-            });
+    console.log('🔄 Tokens refreshed');
+    return {
+      accessToken: refreshed.accessToken,
+      refreshToken: refreshed.refreshToken
+    };
+  } catch (err) {
+    console.error('❌ Token refresh failed:', err.message);
+    return null;
+  }
+}
 
-            currentAccessToken = refreshed.accessToken;
-            currentRefreshToken = refreshed.refreshToken;
+// Strict retry until success
+async function sendUntilSuccess({ user, message, accessToken, refreshToken }) {
+  let currentAccessToken = accessToken;
+  let currentRefreshToken = refreshToken;
+  let attempt = 0;
 
-            await kingsChatWebSdk.sendMessage({
-              message,
-              userIdentifier: user,
-              accessToken: currentAccessToken
-            });
-            return { user, status: 'success_after_retry' };
-          }
-          return { user, status: 'failed', error: error.message };
-        }
-      })
-    );
+  while (true) {
+    attempt++;
+    try {
+      await kingsChatWebSdk.sendMessage({
+        userIdentifier: user,
+        message,
+        accessToken: currentAccessToken
+      });
 
-    // the responses
-    const successful = results.filter(r => r.value?.status.includes('success'));
-    const failed = results.filter(r => !r.value?.status.includes('success'));
-
-    res.json({
-      success: true,
-      stats: {
-        total: users.length,
-        successful: successful.length,
-        failed: failed.length
-      },
-      details: results.map(r => r.value || r.reason),
-      tokens: {
+      console.log(`✅ [${attempt}] Message sent successfully to ${user}`);
+      return {
+        success: true,
         accessToken: currentAccessToken,
         refreshToken: currentRefreshToken
-      }
-    });
+      };
+    } catch (error) {
+      const detailedError = error.response?.data || error.message || 'Unknown error';
+      console.error(`❌ [${attempt}] Failed to send message to ${user}:`, detailedError);
 
-  } catch (error) {
-    res.status(500).json({
+      // Refresh token and retry after short delay
+      const newTokens = await refreshTokens(currentRefreshToken);
+      if (newTokens) {
+        currentAccessToken = newTokens.accessToken;
+        currentRefreshToken = newTokens.refreshToken;
+        console.log(`🔄 Token refreshed after failure for ${user}`);
+      }
+
+      await new Promise(res => setTimeout(res, 1000)); // Wait before retry
+    }
+  }
+}
+
+app.post('/api/send-sequential', async (req, res) => {
+  const { users, message, accessToken, refreshToken } = req.body;
+
+  if (!users || !message || !accessToken || !refreshToken) {
+    return res.status(400).json({
       success: false,
-      error: error.message
+      error: 'Missing required fields: users, message, accessToken, refreshToken'
     });
   }
+
+  let currentAccessToken = accessToken;
+  let currentRefreshToken = refreshToken;
+  const results = [];
+
+  for (const user of users) {
+    console.log(`➡️ Sending to ${user}`);
+
+    const result = await sendUntilSuccess({
+      user,
+      message,
+      accessToken: currentAccessToken,
+      refreshToken: currentRefreshToken
+    });
+
+    // Update tokens for next use
+    currentAccessToken = result.accessToken;
+    currentRefreshToken = result.refreshToken;
+
+    results.push({ user, status: 'success' });
+
+    await new Promise(r => setTimeout(r, 900)); // Delay before next user
+  }
+
+  res.json({
+    success: true,
+    tokens: {
+      accessToken: currentAccessToken,
+      refreshToken: currentRefreshToken
+    },
+    stats: {
+      total: users.length,
+      successful: results.length
+    },
+    details: results
+  });
 });
 
 app.post('/api/refresh-token', async (req, res) => {
@@ -121,6 +144,7 @@ app.post('/api/refresh-token', async (req, res) => {
   }
 });
 
+
 app.listen(PORT, () => {
-  console.log(`KingsChat API running on http://localhost:${PORT}`);
+  console.log(`🚀 KingsChat Sequential Sender running at http://localhost:${PORT}`);
 });
