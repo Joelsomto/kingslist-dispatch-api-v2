@@ -217,17 +217,17 @@ const logger = winston.createLogger({
 
         }),
 
-        // new winston.transports.Console({
+        new winston.transports.Console({
 
-        //     format: winston.format.combine(
+            format: winston.format.combine(
 
-        //         winston.format.colorize(),
+                winston.format.colorize(),
 
-        //         winston.format.simple()
+                winston.format.simple()
 
-        //     )
+            )
 
-        // })
+        })
 
     ]
 
