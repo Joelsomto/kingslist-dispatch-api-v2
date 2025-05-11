@@ -1,546 +1,276 @@
-// require('dotenv').config();
-// const express = require('express');
-// const cors = require('cors');
-// const kingsChatWebSdk = require('kingschat-web-sdk');
-
-// const app = express();
-// const PORT =  process.env.PORT || 3000;
-
-// app.use(cors());
-// app.use(express.json());
-
-// async function refreshTokens(refreshToken) {
-//   try {
-//     const refreshed = await kingsChatWebSdk.refreshAuthenticationToken({
-//       clientId: process.env.KINGSCHAT_CLIENT_ID,
-//       refreshToken
-//     });
-
-//     console.log('🔄 Tokens refreshed');
-//     return {
-//       accessToken: refreshed.accessToken,
-//       refreshToken: refreshed.refreshToken
-//     };
-//   } catch (err) {
-//     console.error('❌ Token refresh failed:', err.message);
-//     return null;
-//   }
-// }
-
-// // Strict retry until success
-// async function sendUntilSuccess({ user, message, accessToken, refreshToken }) {
-//   let currentAccessToken = accessToken;
-//   let currentRefreshToken = refreshToken;
-//   let attempt = 0;
-
-//   while (true) {
-//     attempt++;
-//     try {
-//       await kingsChatWebSdk.sendMessage({
-//         userIdentifier: user,
-//         message,
-//         accessToken: currentAccessToken
-//       });
-
-//       console.log(`✅ [${attempt}] Message sent successfully to ${user}`);
-//       return {
-//         success: true,
-//         accessToken: currentAccessToken,
-//         refreshToken: currentRefreshToken
-//       };
-//     } catch (error) {
-//       const detailedError = error.response?.data || error.message || 'Unknown error';
-//       console.error(`❌ [${attempt}] Failed to send message to ${user}:`, detailedError);
-
-//       // Refresh token and retry after short delay
-//       const newTokens = await refreshTokens(currentRefreshToken);
-//       if (newTokens) {
-//         currentAccessToken = newTokens.accessToken;
-//         currentRefreshToken = newTokens.refreshToken;
-//         console.log(`🔄 Token refreshed after failure for ${user}`);
-//       }
-
-//       await new Promise(res => setTimeout(res, 1000)); // Wait before retry
-//     }
-//   }
-// }
-
-// app.post('/api/send-sequential', async (req, res) => {
-//   const { users, message, accessToken, refreshToken } = req.body;
-
-//   if (!users || !message || !accessToken || !refreshToken) {
-//     return res.status(400).json({
-//       success: false,
-//       error: 'Missing required fields: users, message, accessToken, refreshToken'
-//     });
-//   }
-
-//   let currentAccessToken = accessToken;
-//   let currentRefreshToken = refreshToken;
-//   const results = [];
-
-//   for (const user of users) {
-//     console.log(`➡️ Sending to ${user}`);
-
-//     const result = await sendUntilSuccess({
-//       user,
-//       message,
-//       accessToken: currentAccessToken,
-//       refreshToken: currentRefreshToken
-//     });
-
-//     // Update tokens for next use
-//     currentAccessToken = result.accessToken;
-//     currentRefreshToken = result.refreshToken;
-
-//     results.push({ user, status: 'success' });
-
-//     await new Promise(r => setTimeout(r, 900)); // Delay before next user
-//   }
-
-//   res.json({
-//     success: true,
-//     tokens: {
-//       accessToken: currentAccessToken,
-//       refreshToken: currentRefreshToken
-//     },
-//     stats: {
-//       total: users.length,
-//       successful: results.length
-//     },
-//     details: results
-//   });
-// });
-
-// app.post('/api/refresh-token', async (req, res) => {
-//   const { refreshToken } = req.body;
-
-//   if (!refreshToken) {
-//     return res.status(400).json({
-//       success: false,
-//       error: 'refreshToken is required'
-//     });
-//   }
-
-//   try {
-//     const newTokens = await kingsChatWebSdk.refreshAuthenticationToken({
-//       clientId: process.env.KINGSCHAT_CLIENT_ID,
-//       refreshToken
-//     });
-
-//     res.json({
-//       success: true,
-//       accessToken: newTokens.accessToken,
-//       refreshToken: newTokens.refreshToken,
-//       expiresIn: newTokens.expiresInMillis
-//     });
-
-//   } catch (error) {
-//     res.status(401).json({
-//       success: false,
-//       error: 'Token refresh failed',
-//       details: error.message
-//     });
-//   }
-// });
-
-
-// app.listen(PORT, () => {
-//   console.log(`🚀 KingsChat Sequential Sender running at http://localhost:${PORT}`);
-// });
-
-
-
-
-
-
-
-
-
-
 require('dotenv').config();
-
-const express = require('express');
-
-const cors = require('cors');
-
+const axios = require('axios');
 const kingsChatWebSdk = require('kingschat-web-sdk');
-
 const winston = require('winston');
-
+const path = require('path');
 const fs = require('fs');
 
-const path = require('path');
-
-
-const app = express();
-
-const PORT = 3000;
-
-
-// Configure Winston logger
-
+// Configure logger
 const logDir = 'logs';
-
-if (!fs.existsSync(logDir)) {
-
-    fs.mkdirSync(logDir);
-
-}
-
+if (!fs.existsSync(logDir)) fs.mkdirSync(logDir);
 
 const logger = winston.createLogger({
-
-    level: 'info',
-
-    format: winston.format.combine(
-
-        winston.format.timestamp(),
-
-        winston.format.json()
-
-    ),
-
-    transports: [
-
-        new winston.transports.File({ 
-
-            filename: path.join(logDir, 'error.log'), 
-
-            level: 'error' 
-
-        }),
-
-        new winston.transports.File({ 
-
-            filename: path.join(logDir, 'combined.log') 
-
-        }),
-
-        new winston.transports.Console({
-
-            format: winston.format.combine(
-
-                winston.format.colorize(),
-
-                winston.format.simple()
-
-            )
-
-        })
-
-    ]
-
+  level: 'info',
+  format: winston.format.combine(
+    winston.format.timestamp(),
+    winston.format.json()
+  ),
+  transports: [
+    new winston.transports.File({ 
+      filename: path.join(logDir, 'dispatch-error.log'), 
+      level: 'error' 
+    }),
+    new winston.transports.File({ 
+      filename: path.join(logDir, 'dispatch-combined.log') 
+    }),
+    new winston.transports.Console({
+      format: winston.format.combine(
+        winston.format.colorize(),
+        winston.format.printf(info => 
+          `${info.timestamp} ${info.level}: ${info.message}`)
+      )
+    })
+  ]
 });
 
+class DispatchWorker {
+  constructor() {
+    this.currentTokens = null;
+    this.isProcessing = false;
+    this.rateLimitDelay = 900;
+    this.apiBaseUrl = 'https://kingslist.pro/app/default/api';
+    this.dispatchStatus = {
+      PENDING: 0,
+      DISPATCHING: 1,
+      COMPLETED: 2,
+      FAILED: 3,
+      INCOMPLETE: 4
+    };
+  }
 
-// Add a handle for uncaught exceptions
-
-logger.exceptions.handle(
-
-    new winston.transports.File({ filename: path.join(logDir, 'exceptions.log') })
-
-);
-
-
-app.use(cors());
-
-app.use(express.json());
-
-
-async function refreshTokens(refreshToken) {
-
+  async refreshTokens(refreshToken) {
     try {
+      const response = await axios.post(
+        'https://kingslist-dispatch-api.onrender.com/api/refresh-token',
+        { refreshToken }
+      );
 
-        const refreshed = await kingsChatWebSdk.refreshAuthenticationToken({
+      if (response.data?.success) {
+        this.currentTokens = {
+          accessToken: response.data.accessToken,
+          refreshToken: response.data.refreshToken || refreshToken
+        };
+        logger.info('🔄 Tokens refreshed successfully');
+        return true;
+      }
+    } catch (error) {
+      logger.error('❌ Token refresh failed:', error.message);
+    }
+    return false;
+  }
 
-            clientId: process.env.KINGSCHAT_CLIENT_ID,
+  async sendMessage(job) {
+    let attempts = 0;
+    const maxAttempts = 3;
+    let lastError = null;
 
-            refreshToken
-
-        });
-
-
-        logger.info('🔄 Tokens refreshed');
-
-        return {
-
-            accessToken: refreshed.accessToken,
-
-            refreshToken: refreshed.refreshToken
-
+    while (attempts < maxAttempts) {
+      attempts++;
+      try {
+        const tokens = this.currentTokens || {
+          accessToken: job.access_token,
+          refreshToken: job.refresh_token
         };
 
-    } catch (err) {
-
-        logger.error(`❌ Token refresh failed: ${err.message}`);
-
-        return null;
-
-    }
-
-}
-
-
-async function sendUntilSuccess({ user, message, accessToken, refreshToken }) {
-
-    let currentAccessToken = accessToken;
-
-    let currentRefreshToken = refreshToken;
-
-    let attempt = 0;
-
-
-    while (true) {
-
-        attempt++;
-
-        try {
-
-            await kingsChatWebSdk.sendMessage({
-
-                userIdentifier: user,
-
-                message,
-
-                accessToken: currentAccessToken
-
-            });
-
-
-            logger.info(`✅ [${attempt}] Message sent successfully to ${user}`);
-
-            return {
-
-                success: true,
-
-                accessToken: currentAccessToken,
-
-                refreshToken: currentRefreshToken
-
-            };
-
-        } catch (error) {
-
-            const detailedError = error.response?.data || error.message || 'Unknown error';
-
-            logger.error(`❌ [${attempt}] Failed to send message to ${user}: ${detailedError}`);
-
-
-            const newTokens = await refreshTokens(currentRefreshToken);
-
-            if (newTokens) {
-
-                currentAccessToken = newTokens.accessToken;
-
-                currentRefreshToken = newTokens.refreshToken;
-
-                logger.info(`🔄 Token refreshed after failure for ${user}`);
-
-            }
-
-
-            await new Promise(res => setTimeout(res, 1000));
-
+        if (!tokens.accessToken) {
+          throw new Error('No access token available');
         }
 
-    }
-
-}
-
-
-app.post('/api/send-sequential', async (req, res) => {
-
-    const { users, message, accessToken, refreshToken } = req.body;
-
-
-    if (!users || !message || !accessToken || !refreshToken) {
-
-        logger.error('Missing required fields in /api/send-sequential request');
-
-        return res.status(400).json({
-
-            success: false,
-
-            error: 'Missing required fields: users, message, accessToken, refreshToken'
-
+        // Send the message
+        const result = await kingsChatWebSdk.sendMessage({
+          userIdentifier: job.kc_id,
+          message: job.message,
+          accessToken: tokens.accessToken
         });
 
-    }
-
-
-    let currentAccessToken = accessToken;
-
-    let currentRefreshToken = refreshToken;
-
-    const results = [];
-
-
-    logger.info(`Starting dispatch to ${users.length} users`);
-
-
-    for (const user of users) {
-
-        logger.info(`➡️ Sending to ${user}`);
-
-
-        const result = await sendUntilSuccess({
-
-            user,
-
-            message,
-
-            accessToken: currentAccessToken,
-
-            refreshToken: currentRefreshToken
-
+        // Log success
+        await this.saveLog({
+          dmsg_id: job.dmsg_id,
+          list_id: job.list_id,
+          user_id: job.user_id,
+          kc_id: job.kc_id,
+          kc_username: job.username,
+          fullname: job.fullname,
+          status: 'success',
+          error: null
         });
 
+        logger.info(`✅ Successfully sent to ${job.kc_id}`);
+        return true;
 
-        currentAccessToken = result.accessToken;
+      } catch (error) {
+        lastError = error;
+        logger.warn(`⚠️ Attempt ${attempts} failed for ${job.kc_id}: ${error.message}`);
 
-        currentRefreshToken = result.refreshToken;
+        // Log failure
+        await this.saveLog({
+          dmsg_id: job.dmsg_id,
+          list_id: job.list_id,
+          user_id: job.user_id,
+          kc_id: job.kc_id,
+          kc_username: job.username,
+          fullname: job.fullname,
+          status: 'failed',
+          error: error.message
+        });
 
-        results.push({ user, status: 'success' });
+        if (job.refresh_token) {
+          await this.refreshTokens(job.refresh_token);
+        }
 
-
-        await new Promise(r => setTimeout(r, 900));
-
+        if (attempts < maxAttempts) {
+          await new Promise(resolve => setTimeout(resolve, 1000 * attempts));
+        }
+      }
     }
 
+    throw lastError || new Error(`Failed after ${maxAttempts} attempts`);
+  }
 
-    logger.info(`✅ Completed dispatch to ${users.length} users`);
+  async saveLog(logData) {
+    try {
+      await axios.post(
+        `${this.apiBaseUrl}/save_log.php`,
+        logData,
+        {
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${this.currentTokens?.accessToken || ''}`
+          }
+        }
+      );
+      logger.debug(`📝 Log saved for ${logData.kc_id}`);
+    } catch (error) {
+      logger.error(`Failed to save log for ${logData.kc_id}:`, error.message);
+    }
+  }
 
-
-    res.json({
-
-        success: true,
-
-        tokens: {
-
-            accessToken: currentAccessToken,
-
-            refreshToken: currentRefreshToken
-
+  async updateDispatchCount(dmsgId, count, status) {
+    try {
+      await axios.post(
+        `${this.apiBaseUrl}/updateDispatchCount.php`,
+        {
+          dmsg_id: dmsgId,
+          dispatch_count: count,
+          status: status
         },
-
-        stats: {
-
-            total: users.length,
-
-            successful: results.length
-
-        },
-
-        details: results
-
-    });
-
-});
-
-
-app.post('/api/refresh-token', async (req, res) => {
-
-    const { refreshToken } = req.body;
-
-
-    if (!refreshToken) {
-
-        logger.error('refreshToken is required');
-
-        return res.status(400).json({
-
-            success: false,
-
-            error: 'refreshToken is required'
-
-        });
-
+        {
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${this.currentTokens?.accessToken || ''}`
+          }
+        }
+      );
+      logger.info(`📊 Updated dispatch count for ${dmsgId} to status ${status}`);
+    } catch (error) {
+      logger.error(`Failed to update dispatch count:`, error.message);
     }
+  }
 
+  async updateJobStatus(jobId, status, error = null) {
+    try {
+      await axios.post(
+        `${this.apiBaseUrl}/setDispatchStatus.php`,
+        { 
+          id: jobId, 
+          status: status, 
+          error: error?.message || null 
+        }
+      );
+      logger.info(`📝 Updated job ${jobId} to ${status}`);
+    } catch (error) {
+      logger.error(`Failed to update job ${jobId} status:`, error.message);
+    }
+  }
+
+  async processJobs() {
+    if (this.isProcessing) return;
+    this.isProcessing = true;
 
     try {
+      logger.info('🔍 Fetching pending jobs...');
+      const response = await axios.get(`${this.apiBaseUrl}/getDispatchQueue.php`);
+      const jobs = response.data?.data || [];
 
-        const newTokens = await kingsChatWebSdk.refreshAuthenticationToken({
+      if (jobs.length === 0) {
+        logger.info('📭 No pending jobs found');
+        return;
+      }
 
-            clientId: process.env.KINGSCHAT_CLIENT_ID,
+      logger.info(`📥 Found ${jobs.length} jobs to process`);
 
-            refreshToken
+      // Update overall status to DISPATCHING
+      if (jobs[0].dmsg_id) {
+        await this.updateDispatchCount(jobs[0].dmsg_id, jobs.length, this.dispatchStatus.DISPATCHING);
+      }
 
-        });
+      let successCount = 0;
+      let failCount = 0;
 
+      for (const job of jobs) {
+        try {
+          await this.updateJobStatus(job.id, 'processing');
+          
+          const success = await this.sendMessage(job);
+          if (success) {
+            successCount++;
+          } else {
+            failCount++;
+          }
+          
+          await this.updateJobStatus(job.id, success ? 'completed' : 'failed');
+          await new Promise(resolve => setTimeout(resolve, this.rateLimitDelay));
+          
+        } catch (error) {
+          failCount++;
+          await this.updateJobStatus(job.id, 'failed', error);
+        }
+      }
 
-        logger.info('🔄 Token refreshed successfully');
-
-        res.json({
-
-            success: true,
-
-            accessToken: newTokens.accessToken,
-
-            refreshToken: newTokens.refreshToken,
-
-            expiresIn: newTokens.expiresInMillis
-
-        });
-
+      // Update overall status
+      if (jobs[0].dmsg_id) {
+        let finalStatus;
+        if (failCount === 0) {
+          finalStatus = this.dispatchStatus.COMPLETED;
+        } else if (successCount === 0) {
+          finalStatus = this.dispatchStatus.FAILED;
+        } else {
+          finalStatus = this.dispatchStatus.INCOMPLETE;
+        }
+        await this.updateDispatchCount(jobs[0].dmsg_id, successCount, finalStatus);
+      }
 
     } catch (error) {
-
-        logger.error(`❌ Token refresh failed: ${error.message}`);
-
-        res.status(401).json({
-
-            success: false,
-
-            error: 'Token refresh failed',
-
-            details: error.message
-
-        });
-
+      logger.error('❌ Worker processing error:', error.message);
+    } finally {
+      this.isProcessing = false;
+      logger.info('🏁 Finished processing batch');
     }
+  }
 
-});
+  start(interval = 60000) {
+    logger.info('🚀 Starting KingsChat Dispatch Worker');
+    this.processJobs();
+    setInterval(() => this.processJobs(), interval);
+  }
+}
 
+// Start the worker
+const worker = new DispatchWorker();
+worker.start();
 
-// Error handling middleware
-
-app.use((err, req, res, next) => {
-
-    logger.error(`🚨 Unhandled error: ${err.stack}`);
-
-    res.status(500).json({
-
-        success: false,
-
-        error: 'Internal server error'
-
-    });
-
-});
-
-
+// Handle process termination
 process.on('SIGINT', () => {
-
-    logger.info('Server shutting down...');
-
-    process.exit(0);
-
-});
-
-
-process.on('SIGTERM', () => {
-
-    logger.info('Server terminating...');
-
-    process.exit(0);
-
-});
-
-
-app.listen(PORT, () => {
-
-    logger.info(`🚀 KingsChat Sequential Sender running at http://localhost:${PORT}`);
-
+  logger.info('🛑 Gracefully shutting down...');
+  process.exit(0);
 });
