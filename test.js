@@ -46,7 +46,6 @@ class DispatchWorker {
       FAILED: 3,
       INCOMPLETE: 4
     };
-    this.totalDispatched = 0;
   }
 
   async refreshTokens(refreshToken) {
@@ -70,87 +69,79 @@ class DispatchWorker {
     return false;
   }
 
-  async sendMessage(job) {
-    let attempts = 0;
-    const maxAttempts = 3;
-    let lastError = null;
+async sendMessage(job) {
+  let attempts = 0;
+  const maxAttempts = 3;
+  let lastError = null;
 
-    // Format message with placeholders
-    let message = job.message
-      .replace(/<fullname>/gi, job.fullname || '')
-      .replace(/<kc_username>/gi, job.username || '');
+  while (attempts < maxAttempts) {
+    attempts++;
+    try {
+      const tokens = this.currentTokens || {
+        accessToken: job.access_token,
+        refreshToken: job.refresh_token
+      };
 
-    while (attempts < maxAttempts) {
-      attempts++;
-      try {
-        // Always use fresh tokens for each dispatch
-        if (job.refresh_token) {
-          await this.refreshTokens(job.refresh_token);
-        }
+      if (!tokens.accessToken) {
+        throw new Error('No access token available');
+      }
 
-        const tokens = this.currentTokens || {
-          accessToken: job.access_token,
-          refreshToken: job.refresh_token
-        };
+      // Replace the <fullname> and <kc_username> placeholders in the message
+      let message = job.message
+        .replace(/<fullname>/gi, job.fullname || '')  // Replace <fullname> with the user's full name
+        .replace(/<kc_username>/gi, job.username || '');  // Replace <kc_username> with the username
 
-        if (!tokens.accessToken) {
-          throw new Error('No access token available');
-        }
+      // Send the message with the formatted message
+      const result = await kingsChatWebSdk.sendMessage({
+        userIdentifier: job.kc_id,
+        message: message,
+        accessToken: tokens.accessToken
+      });
 
-        // Send the message
-        const result = await kingsChatWebSdk.sendMessage({
-          userIdentifier: job.kc_id,
-          message: message,
-          accessToken: tokens.accessToken
-        });
+      // Log success
+      await this.saveLog({
+        dmsg_id: job.dmsg_id,
+        list_id: job.list_id,
+        user_id: job.user_id,
+        kc_id: job.kc_id,
+        kc_username: job.username,
+        fullname: job.fullname,
+        status: 'success',
+        error: null
+      });
 
-        // Log success
-        await this.saveLog({
-          dmsg_id: job.dmsg_id,
-          list_id: job.list_id,
-          user_id: job.user_id,
-          kc_id: job.kc_id,
-          kc_username: job.username,
-          fullname: job.fullname,
-          status: 'success',
-          error: null
-        });
+      logger.info(`✅ Successfully sent to ${job.kc_id}`);
+      return true;
 
-        // Increment total dispatched count
-        this.totalDispatched++;
-        
-        logger.info(`✅ Successfully sent to ${job.kc_id}`);
-        return true;
+    } catch (error) {
+      lastError = error;
+      logger.warn(`⚠️ Attempt ${attempts} failed for ${job.kc_id}: ${error.message}`);
 
-      } catch (error) {
-        lastError = error;
-        logger.warn(`⚠️ Attempt ${attempts} failed for ${job.kc_id}: ${error.message}`);
+      // Log failure
+      await this.saveLog({
+        dmsg_id: job.dmsg_id,
+        list_id: job.list_id,
+        user_id: job.user_id,
+        kc_id: job.kc_id,
+        kc_username: job.username,
+        fullname: job.fullname,
+        status: 'failed',
+        error: error.message
+      });
 
-        // Log failure
-        await this.saveLog({
-          dmsg_id: job.dmsg_id,
-          list_id: job.list_id,
-          user_id: job.user_id,
-          kc_id: job.kc_id,
-          kc_username: job.username,
-          fullname: job.fullname,
-          status: 'failed',
-          error: error.message
-        });
+      if (job.refresh_token) {
+        await this.refreshTokens(job.refresh_token);
+      }
 
-        // Refresh tokens after each failure
-        if (job.refresh_token) {
-          await this.refreshTokens(job.refresh_token);
-        }
-
-        if (attempts < maxAttempts) {
-          await new Promise(resolve => setTimeout(resolve, 1000 * attempts));
-        }
+      if (attempts < maxAttempts) {
+        await new Promise(resolve => setTimeout(resolve, 1000 * attempts));
       }
     }
-
-    throw lastError || new Error(`Failed after ${maxAttempts} attempts`);
   }
+
+  throw lastError || new Error(`Failed after ${maxAttempts} attempts`);
+}
+
 
   async saveLog(logData) {
     try {
@@ -170,13 +161,13 @@ class DispatchWorker {
     }
   }
 
-  async updateDispatchCount(dmsgId, additionalCount, status) {
+  async updateDispatchCount(dmsgId, count, status) {
     try {
       await axios.post(
         `${this.apiBaseUrl}/updateDispatchCount.php`,
         {
           dmsg_id: dmsgId,
-          dispatch_count: additionalCount, // Now adds to existing count
+          dispatch_count: count,
           status: status
         },
         {
@@ -186,7 +177,7 @@ class DispatchWorker {
           }
         }
       );
-      logger.info(`📊 Added ${additionalCount} to dispatch count for ${dmsgId}, status ${status}`);
+      logger.info(`📊 Updated dispatch count for ${dmsgId} to status ${status}`);
     } catch (error) {
       logger.error(`Failed to update dispatch count:`, error.message);
     }
@@ -226,7 +217,7 @@ class DispatchWorker {
 
       // Update overall status to DISPATCHING
       if (jobs[0].dmsg_id) {
-        await this.updateDispatchCount(jobs[0].dmsg_id, 0, this.dispatchStatus.DISPATCHING);
+        await this.updateDispatchCount(jobs[0].dmsg_id, jobs.length, this.dispatchStatus.DISPATCHING);
       }
 
       let successCount = 0;
@@ -269,7 +260,7 @@ class DispatchWorker {
       logger.error('❌ Worker processing error:', error.message);
     } finally {
       this.isProcessing = false;
-      logger.info(`🏁 Finished processing batch. Total dispatched: ${this.totalDispatched}`);
+      logger.info('🏁 Finished processing batch');
     }
   }
 
