@@ -4,6 +4,7 @@ const kingsChatWebSdk = require('kingschat-web-sdk');
 const winston = require('winston');
 const path = require('path');
 const fs = require('fs');
+const he = require('he');
 
 // Configure logger
 const logDir = 'logs';
@@ -76,9 +77,17 @@ class DispatchWorker {
     let lastError = null;
 
     // Format message with placeholders
-    let message = job.message
-      .replace(/<fullname>/gi, job.fullname || '')
-      .replace(/<kc_username>/gi, job.username || '');
+    function fixMojibake(str) {
+      return Buffer.from(str, 'binary').toString('utf8');
+    }
+
+let message = job.message
+  .replace(/<fullname>/gi, job.fullname || '')
+  .replace(/<kc_username>/gi, job.username || '');
+
+// Fix double issues: HTML entities + mojibake
+message = he.decode(fixMojibake(message));
+
 
     while (attempts < maxAttempts) {
       attempts++;
@@ -289,3 +298,14 @@ process.on('SIGINT', () => {
   logger.info('🛑 Gracefully shutting down...');
   process.exit(0);
 });
+
+
+
+
+
+
+
+
+
+
+

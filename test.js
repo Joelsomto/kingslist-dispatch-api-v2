@@ -1,3 +1,5 @@
+
+
 require('dotenv').config();
 const axios = require('axios');
 const kingsChatWebSdk = require('kingschat-web-sdk');
@@ -46,6 +48,8 @@ class DispatchWorker {
       FAILED: 3,
       INCOMPLETE: 4
     };
+    this.totalDispatched = 0;
+    this.dispatchCounts = new Map(); // Track counts in memory
   }
 
   async refreshTokens(refreshToken) {
@@ -69,79 +73,102 @@ class DispatchWorker {
     return false;
   }
 
-async sendMessage(job) {
-  let attempts = 0;
-  const maxAttempts = 3;
-  let lastError = null;
+  async sendMessage(job) {
+    let attempts = 0;
+    const maxAttempts = 3;
+    let lastError = null;
 
-  while (attempts < maxAttempts) {
-    attempts++;
-    try {
-      const tokens = this.currentTokens || {
-        accessToken: job.access_token,
-        refreshToken: job.refresh_token
-      };
+    // Format message with placeholders
+    let message = job.message
+      .replace(/<fullname>/gi, job.fullname || '')
+      .replace(/<kc_username>/gi, job.username || '');
 
-      if (!tokens.accessToken) {
-        throw new Error('No access token available');
-      }
+    while (attempts < maxAttempts) {
+      attempts++;
+      try {
+        // Always use fresh tokens for each dispatch
+        if (job.refresh_token) {
+          await this.refreshTokens(job.refresh_token);
+        }
 
-      // Replace the <fullname> and <kc_username> placeholders in the message
-      let message = job.message
-        .replace(/<fullname>/gi, job.fullname || '')  // Replace <fullname> with the user's full name
-        .replace(/<kc_username>/gi, job.username || '');  // Replace <kc_username> with the username
+        const tokens = this.currentTokens || {
+          accessToken: job.access_token,
+          refreshToken: job.refresh_token
+        };
 
-      // Send the message with the formatted message
-      const result = await kingsChatWebSdk.sendMessage({
-        userIdentifier: job.kc_id,
-        message: message,
-        accessToken: tokens.accessToken
-      });
+        if (!tokens.accessToken) {
+          throw new Error('No access token available');
+        }
 
-      // Log success
-      await this.saveLog({
-        dmsg_id: job.dmsg_id,
-        list_id: job.list_id,
-        user_id: job.user_id,
-        kc_id: job.kc_id,
-        kc_username: job.username,
-        fullname: job.fullname,
-        status: 'success',
-        error: null
-      });
+        // Send the message
+        const result = await kingsChatWebSdk.sendMessage({
+          userIdentifier: job.kc_id,
+          message: message,
+          accessToken: tokens.accessToken
+        });
 
-      logger.info(`✅ Successfully sent to ${job.kc_id}`);
-      return true;
+        // Update in-memory count
+        this.updateMemoryCount(job.dmsg_id, 'success');
+        
+        // Log success
+        await this.saveLog({
+          dmsg_id: job.dmsg_id,
+          list_id: job.list_id,
+          user_id: job.user_id,
+          kc_id: job.kc_id,
+          kc_username: job.username,
+          fullname: job.fullname,
+          status: 'success',
+          error: null
+        });
 
-    } catch (error) {
-      lastError = error;
-      logger.warn(`⚠️ Attempt ${attempts} failed for ${job.kc_id}: ${error.message}`);
+        // Increment total dispatched count
+        this.totalDispatched++;
+        
+        logger.info(`✅ Successfully sent to ${job.kc_id}`);
+        return true;
 
-      // Log failure
-      await this.saveLog({
-        dmsg_id: job.dmsg_id,
-        list_id: job.list_id,
-        user_id: job.user_id,
-        kc_id: job.kc_id,
-        kc_username: job.username,
-        fullname: job.fullname,
-        status: 'failed',
-        error: error.message
-      });
+      } catch (error) {
+        lastError = error;
+        // Update in-memory count
+        this.updateMemoryCount(job.dmsg_id, 'failed');
+        
+        logger.warn(`⚠️ Attempt ${attempts} failed for ${job.kc_id}: ${error.message}`);
 
-      if (job.refresh_token) {
-        await this.refreshTokens(job.refresh_token);
-      }
+        // Log failure
+        await this.saveLog({
+          dmsg_id: job.dmsg_id,
+          list_id: job.list_id,
+          user_id: job.user_id,
+          kc_id: job.kc_id,
+          kc_username: job.username,
+          fullname: job.fullname,
+          status: 'failed',
+          error: error.message
+        });
 
-      if (attempts < maxAttempts) {
-        await new Promise(resolve => setTimeout(resolve, 1000 * attempts));
+        // Refresh tokens after each failure
+        if (job.refresh_token) {
+          await this.refreshTokens(job.refresh_token);
+        }
+
+        if (attempts < maxAttempts) {
+          await new Promise(resolve => setTimeout(resolve, 1000 * attempts));
+        }
       }
     }
+
+    throw lastError || new Error(`Failed after ${maxAttempts} attempts`);
   }
 
-  throw lastError || new Error(`Failed after ${maxAttempts} attempts`);
-}
-
+  updateMemoryCount(dmsgId, type) {
+    if (!this.dispatchCounts.has(dmsgId)) {
+      this.dispatchCounts.set(dmsgId, { success: 0, failed: 0 });
+    }
+    const counts = this.dispatchCounts.get(dmsgId);
+    counts[type]++;
+    this.dispatchCounts.set(dmsgId, counts);
+  }
 
   async saveLog(logData) {
     try {
@@ -161,13 +188,25 @@ async sendMessage(job) {
     }
   }
 
-  async updateDispatchCount(dmsgId, count, status) {
+  async updateDispatchStatus(dmsgId) {
     try {
+      const counts = this.dispatchCounts.get(dmsgId) || { success: 0, failed: 0 };
+      
+      let status;
+      if (counts.failed === 0) {
+        status = this.dispatchStatus.COMPLETED;
+      } else if (counts.success === 0) {
+        status = this.dispatchStatus.FAILED;
+      } else {
+        status = this.dispatchStatus.INCOMPLETE;
+      }
+
       await axios.post(
         `${this.apiBaseUrl}/updateDispatchCount.php`,
         {
           dmsg_id: dmsgId,
-          dispatch_count: count,
+          success_count: counts.success,
+          failed_count: counts.failed,
           status: status
         },
         {
@@ -177,9 +216,10 @@ async sendMessage(job) {
           }
         }
       );
-      logger.info(`📊 Updated dispatch count for ${dmsgId} to status ${status}`);
+      
+      logger.info(`📊 Dispatch ${dmsgId} updated - Success: ${counts.success}, Failed: ${counts.failed}, Status: ${status}`);
     } catch (error) {
-      logger.error(`Failed to update dispatch count:`, error.message);
+      logger.error(`Failed to update dispatch ${dmsgId} status:`, error.message);
     }
   }
 
@@ -215,52 +255,49 @@ async sendMessage(job) {
 
       logger.info(`📥 Found ${jobs.length} jobs to process`);
 
-      // Update overall status to DISPATCHING
-      if (jobs[0].dmsg_id) {
-        await this.updateDispatchCount(jobs[0].dmsg_id, jobs.length, this.dispatchStatus.DISPATCHING);
-      }
+      // Group jobs by dmsg_id
+      const jobsByDispatch = jobs.reduce((acc, job) => {
+        if (!acc[job.dmsg_id]) {
+          acc[job.dmsg_id] = [];
+        }
+        acc[job.dmsg_id].push(job);
+        return acc;
+      }, {});
 
-      let successCount = 0;
-      let failCount = 0;
-
-      for (const job of jobs) {
+      // Process each dispatch batch
+      for (const [dmsgId, dispatchJobs] of Object.entries(jobsByDispatch)) {
         try {
-          await this.updateJobStatus(job.id, 'processing');
+          // Initialize counts
+          this.dispatchCounts.set(dmsgId, { success: 0, failed: 0 });
           
-          const success = await this.sendMessage(job);
-          if (success) {
-            successCount++;
-          } else {
-            failCount++;
-          }
-          
-          await this.updateJobStatus(job.id, success ? 'completed' : 'failed');
-          await new Promise(resolve => setTimeout(resolve, this.rateLimitDelay));
-          
-        } catch (error) {
-          failCount++;
-          await this.updateJobStatus(job.id, 'failed', error);
-        }
-      }
+          // Update status to DISPATCHING
+          await this.updateDispatchStatus(dmsgId);
 
-      // Update overall status
-      if (jobs[0].dmsg_id) {
-        let finalStatus;
-        if (failCount === 0) {
-          finalStatus = this.dispatchStatus.COMPLETED;
-        } else if (successCount === 0) {
-          finalStatus = this.dispatchStatus.FAILED;
-        } else {
-          finalStatus = this.dispatchStatus.INCOMPLETE;
+          // Process all jobs in this dispatch
+          for (const job of dispatchJobs) {
+            try {
+              await this.updateJobStatus(job.id, 'processing');
+              await this.sendMessage(job);
+              await this.updateJobStatus(job.id, 'completed');
+              await new Promise(resolve => setTimeout(resolve, this.rateLimitDelay));
+            } catch (error) {
+              await this.updateJobStatus(job.id, 'failed', error);
+            }
+          }
+
+          // Final status update
+          await this.updateDispatchStatus(dmsgId);
+
+        } catch (error) {
+          logger.error(`❌ Error processing dispatch ${dmsgId}:`, error.message);
         }
-        await this.updateDispatchCount(jobs[0].dmsg_id, successCount, finalStatus);
       }
 
     } catch (error) {
       logger.error('❌ Worker processing error:', error.message);
     } finally {
       this.isProcessing = false;
-      logger.info('🏁 Finished processing batch');
+      logger.info(`🏁 Finished processing batch. Total dispatched: ${this.totalDispatched}`);
     }
   }
 
