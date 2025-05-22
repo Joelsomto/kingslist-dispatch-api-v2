@@ -47,7 +47,6 @@ class DispatchWorker {
       FAILED: 3,
       INCOMPLETE: 4
     };
-    this.totalDispatched = 0;
   }
 
   async refreshTokens(refreshToken) {
@@ -126,7 +125,6 @@ message = he.decode(fixMojibake(message));
         });
 
         // Increment total dispatched count
-        this.totalDispatched++;
         
         logger.info(`✅ Successfully sent to ${job.kc_id}`);
         return true;
@@ -217,26 +215,37 @@ message = he.decode(fixMojibake(message));
     }
   }
 
-  async processJobs() {
-    if (this.isProcessing) return;
-    this.isProcessing = true;
+async processJobs() {
+  if (this.isProcessing) return;
+  this.isProcessing = true;
 
-    try {
-      logger.info('🔍 Fetching pending jobs...');
-      const response = await axios.get(`${this.apiBaseUrl}/getDispatchQueue.php`);
-      const jobs = response.data?.data || [];
+  try {
+    logger.info('🔍 Fetching pending jobs...');
+    const response = await axios.get(`${this.apiBaseUrl}/getDispatchQueue.php`);
+    
+    const jobsByDispatch = {};
+    const allJobs = response.data?.data || [];
 
-      if (jobs.length === 0) {
-        logger.info('📭 No pending jobs found');
-        return;
+    for (const job of allJobs) {
+      if (!jobsByDispatch[job.dmsg_id]) {
+        jobsByDispatch[job.dmsg_id] = [];
       }
+      jobsByDispatch[job.dmsg_id].push(job);
+    }
 
-      logger.info(`📥 Found ${jobs.length} jobs to process`);
+    if (allJobs.length === 0) {
+      logger.info('📭 No pending jobs found');
+      return;
+    }
 
-      // Update overall status to DISPATCHING
-      if (jobs[0].dmsg_id) {
-        await this.updateDispatchCount(jobs[0].dmsg_id, 0, this.dispatchStatus.DISPATCHING);
-      }
+    logger.info(`📥 Found ${allJobs.length} jobs to process`);
+
+    // Process jobs grouped by dispatch ID
+    for (const [dmsg_id, jobs] of Object.entries(jobsByDispatch)) {
+      logger.info(`🚚 Processing dispatch ID: ${dmsg_id} with ${jobs.length} jobs`);
+
+      // Set initial dispatch status
+      await this.updateDispatchCount(dmsg_id, 0, this.dispatchStatus.DISPATCHING);
 
       let successCount = 0;
       let failCount = 0;
@@ -244,43 +253,45 @@ message = he.decode(fixMojibake(message));
       for (const job of jobs) {
         try {
           await this.updateJobStatus(job.id, 'processing');
-          
+
           const success = await this.sendMessage(job);
           if (success) {
             successCount++;
           } else {
             failCount++;
           }
-          
+
           await this.updateJobStatus(job.id, success ? 'completed' : 'failed');
           await new Promise(resolve => setTimeout(resolve, this.rateLimitDelay));
-          
+
         } catch (error) {
           failCount++;
           await this.updateJobStatus(job.id, 'failed', error);
+          logger.error(`❌ Error processing job ${job.id}: ${error.message}`);
         }
       }
 
-      // Update overall status
-      if (jobs[0].dmsg_id) {
-        let finalStatus;
-        if (failCount === 0) {
-          finalStatus = this.dispatchStatus.COMPLETED;
-        } else if (successCount === 0) {
-          finalStatus = this.dispatchStatus.FAILED;
-        } else {
-          finalStatus = this.dispatchStatus.INCOMPLETE;
-        }
-        await this.updateDispatchCount(jobs[0].dmsg_id, successCount, finalStatus);
+      // Determine final status
+      let finalStatus;
+      if (failCount === 0) {
+        finalStatus = this.dispatchStatus.COMPLETED;
+      } else if (successCount === 0) {
+        finalStatus = this.dispatchStatus.FAILED;
+      } else {
+        finalStatus = this.dispatchStatus.INCOMPLETE;
       }
 
-    } catch (error) {
-      logger.error('❌ Worker processing error:', error.message);
-    } finally {
-      this.isProcessing = false;
-      logger.info(`🏁 Finished processing batch. Total dispatched: ${this.totalDispatched}`);
+      await this.updateDispatchCount(dmsg_id, successCount, finalStatus);
     }
+
+  } catch (error) {
+    logger.error('❌ Worker processing error:', error.message);
+  } finally {
+    this.isProcessing = false;
+    logger.info(`🏁 Finished processing batch.`);
   }
+}
+
 
   start(interval = 60000) {
     logger.info('🚀 Starting KingsChat Dispatch Worker');
